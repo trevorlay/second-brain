@@ -1,11 +1,12 @@
 import * as store from './store.js';
 import { STATUSES, FILE_TYPES } from './store.js';
+import * as mm from './mindmap.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const view = $('#view');
-const state = { entries: [], projects: [], settings: {}, f: { q: '', app: '', project: '', status: '', tag: '' }, showArchived: false };
+const state = { entries: [], projects: [], maps: [], settings: {}, f: { q: '', app: '', project: '', status: '', tag: '' }, showArchived: false };
 
 // ---------- helpers ----------
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -55,7 +56,7 @@ const ICONS = {
 
 // ---------- data ----------
 async function load() {
-  [state.entries, state.projects, state.settings] = await Promise.all([store.listEntries(), store.listProjects(), store.getSettings()]);
+  [state.entries, state.projects, state.settings, state.maps] = await Promise.all([store.listEntries(), store.listProjects(), store.getSettings(), store.listMaps()]);
 }
 function applyTheme(t) {
   document.documentElement.dataset.theme = t || 'dark';
@@ -234,6 +235,7 @@ function renderSettings() {
     <div class="card small"><div class="kv"><span class="muted">Version</span><span>${VERSION}</span></div>
       <div class="kv"><span class="muted">Entries</span><span>${state.entries.length}</span></div>
       <div class="kv"><span class="muted">Projects</span><span>${state.projects.length}</span></div>
+      <div class="kv"><span class="muted">Mind maps</span><span>${state.maps.length}</span></div>
       <p class="muted">Everything is stored only on this phone. Nothing is sent anywhere: no accounts, no tracking. Works offline.</p></div>`;
   $$('[data-theme-set]').forEach(b => b.onclick = async () => { state.settings = await store.saveSettings({ theme: b.dataset.themeSet }); applyTheme(state.settings.theme); render(); });
   $$('[data-app-i]').forEach(inp => inp.onchange = async () => {
@@ -280,17 +282,17 @@ async function doImport(ev) {
   let data;
   try { data = JSON.parse(await file.text()); if (data.app !== 'second-brain') throw 0; }
   catch { return alertDialog('Can\u2019t import', 'That file isn\u2019t a Second Brain backup.'); }
-  const mode = await choiceDialog('Import backup', `${data.entries.length} entries and ${data.projects.length} projects from ${data.exportedAt ? new Date(data.exportedAt).toLocaleString() : 'a backup'}.`,
+  const mode = await choiceDialog('Import backup', `${data.entries.length} entries, ${data.projects.length} projects and ${(data.maps || []).length} mind maps from ${data.exportedAt ? new Date(data.exportedAt).toLocaleString() : 'a backup'}.`,
     [{ v: 'merge', label: 'Merge with what\u2019s here', primary: true }, { v: 'replace', label: 'Replace everything', danger: true }]);
   if (!mode) return;
   const ok = mode === 'merge'
     ? await confirmDialog('Merge backup?', 'New entries are added. Where the same entry exists in both, the newer copy wins.', 'Merge')
-    : await confirmDialog('Replace everything?', 'All entries and projects on this phone will be erased and replaced by the backup. This can\u2019t be undone.', 'Replace', true);
+    : await confirmDialog('Replace everything?', 'All entries, projects and mind maps on this phone will be erased and replaced by the backup. This can\u2019t be undone.', 'Replace', true);
   if (!ok) return;
   try {
     const r = await store.importAll(data, mode);
     await load(); applyTheme(state.settings.theme); render();
-    toast(mode === 'replace' ? `Restored ${r.total} entries` : `Merged: ${r.added} added, ${r.updated} updated`);
+    toast(mode === 'replace' ? `Restored ${r.total} entries` : `Merged: ${r.added} added, ${r.updated} updated`) ;
   } catch (err) { alertDialog('Import failed', err.message || String(err)); }
 }
 
@@ -320,10 +322,10 @@ function alertDialog(title, text) {
     o.querySelector('button').onclick = () => { o.remove(); res(); };
   });
 }
-function promptDialog(title, value = '', okLabel = 'OK') {
+function promptDialog(title, value = '', okLabel = 'OK', placeholder = 'Project name') {
   return new Promise(res => {
     const o = modal(`<div class="dialog" role="dialog" aria-modal="true"><h3>${esc(title)}</h3>
-      <input class="input" id="dlg-in" type="text" value="${esc(value)}" placeholder="Project name" enterkeyhint="done">
+      <input class="input" id="dlg-in" type="text" value="${esc(value)}" placeholder="${esc(placeholder)}" enterkeyhint="done" aria-label="${esc(placeholder)}">
       <div class="row dlgrow"><button class="btn ghost" data-r="0" type="button">Cancel</button><button class="btn primary" data-r="1" type="button" id="dlg-ok">${esc(okLabel)}</button></div></div>`);
     const inp = o.querySelector('input'); setTimeout(() => { inp.focus(); inp.select(); }, 30);
     const finish = ok => { const v = inp.value.trim(); o.remove(); res(ok && v ? v : null); };
@@ -434,14 +436,22 @@ function openForm(entry = null, preset = {}) {
 }
 
 // ---------- router ----------
+const mmCtx = { view, esc, toast, confirmDialog, promptDialog, alertDialog, modal };
+let leaveEditor = null;
 function render() {
   const h = location.hash || '#/search';
   const [, route, arg] = h.match(/^#\/([^/]*)\/?(.*)$/) || [, 'search'];
-  $$('.bottomnav a').forEach(a => a.classList.toggle('active', a.dataset.nav === (route === 'project' ? 'projects' : route)));
+  if (leaveEditor) { const f = leaveEditor; leaveEditor = null; f().then(() => store.listMaps()).then(m => { state.maps = m; }); }
+  document.body.classList.remove('mm-open');
+  document.body.dataset.route = route;
+  $('#fab').setAttribute('aria-label', route === 'maps' ? 'New mind map' : 'Quick add entry');
+  $$('.bottomnav a').forEach(a => a.classList.toggle('active', a.dataset.nav === (route === 'project' ? 'projects' : route === 'map' ? 'maps' : route)));
   $$('.bottomnav a').forEach(a => a.toggleAttribute('aria-current', a.classList.contains('active')));
   if (route === 'projects') renderProjects();
   else if (route === 'project') renderProject(decodeURIComponent(arg));
   else if (route === 'settings') renderSettings();
+  else if (route === 'maps') mm.renderMaps(mmCtx);
+  else if (route === 'map') { const id = decodeURIComponent(arg); mm.openEditor(id, mmCtx).then(f => { if (location.hash === h) leaveEditor = f; else f(); }); }
   else renderSearch();
 }
 let lastRoute = '';
@@ -450,7 +460,7 @@ addEventListener('hashchange', () => {
   if (location.hash === '#/add') { history.replaceState(null, '', '#/search'); render(); openForm(); return; }
   render(); if (r !== lastRoute) scrollTo(0, 0); lastRoute = r;
 });
-$('#fab').onclick = () => openForm(null, location.hash.startsWith('#/project/') ? { projectId: decodeURIComponent(location.hash.slice(10)) } : {});
+$('#fab').onclick = () => location.hash.startsWith('#/maps') ? mm.newMap(mmCtx) : openForm(null, location.hash.startsWith('#/project/') ? { projectId: decodeURIComponent(location.hash.slice(10)) } : {});
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyTheme(state.settings.theme));
 
 (async function start() {
