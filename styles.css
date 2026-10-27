@@ -321,3 +321,7 @@ body.mm-open { overflow: hidden; overscroll-behavior: none; }
 .mm-menu button { min-height: 48px; text-align: left; border: 0; background: none; border-radius: 10px; padding: 0 14px; font-weight: 600; cursor: pointer; }
 .mm-menu button:active { background: var(--surface2); }
 .mm-hint ul { margin: 0 0 16px; padding-left: 20px; display: grid; gap: 8px; color: var(--text); }
+.mm-newtopic { position: absolute; left: 10px; bottom: 10px; z-index: 5; min-height: 48px; display: flex; align-items: center; gap: 6px; padding: 0 16px 0 12px;
+  border-radius: 14px; border: 2px solid #fff; background: #ff7a1a; color: #fff; font-weight: 800; font-size: 16px; cursor: pointer; box-shadow: 0 3px 12px rgba(0,0,0,.35); }
+.mm-newtopic svg { width: 22px; height: 22px; stroke-width: 3; }
+.mm-newtopic:active { filter: brightness(.92); }

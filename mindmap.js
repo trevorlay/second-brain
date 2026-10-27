@@ -142,6 +142,7 @@ export async function openEditor(id, ctx) {
     <div class="mm-world" id="mm-world"><svg class="mm-svg" id="mm-svg" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"></svg><div id="mm-nodes"></div></div>
     <div class="mm-empty" id="mm-empty"><b>Tap anywhere</b> to add your central subject</div>
     <div class="mm-banner" id="mm-banner" hidden><span>Tap another bubble to link to</span><button class="btn" id="mm-linkcancel" type="button">Cancel</button></div>
+    <button class="mm-newtopic" id="mm-newtopic" type="button" aria-label="New topic: add a separate main bubble">${I.plus}<span>New topic</span></button>
     <div class="mm-zoom"><button type="button" id="mm-zout" aria-label="Zoom out">−</button><span id="mm-zpct" aria-label="Zoom level">100%</span><button type="button" id="mm-zin" aria-label="Zoom in">+</button><button type="button" id="mm-fit" aria-label="Fit map to screen">${I.fit}</button></div>
   </div>
   <div class="mm-pop" id="mm-pop" hidden></div>
@@ -159,6 +160,7 @@ export async function openEditor(id, ctx) {
       <button type="button" data-t="child" aria-label="Add child bubble">${I.plus}<span>Child</span></button>
       <button type="button" data-t="link" aria-label="Link to another bubble">${I.link}<span>Link</span></button>
       <button type="button" data-t="fold" aria-label="Collapse or expand branch">${I.fold}<span id="mm-foldlbl">Collapse</span></button>
+      <button type="button" data-t="detach" id="mm-detach" aria-label="Make main topic: detach this branch into its own topic">${I.fit}<span>Main topic</span></button>
       <button type="button" data-t="del" class="danger" aria-label="Delete bubble and its branch">${I.trash}<span>Delete</span></button>
     </div>
     <div class="mm-row" id="mm-fmt">
@@ -306,7 +308,7 @@ export async function openEditor(id, ctx) {
       for (const k2 of ['b', 'i', 'u', 'list']) $(`[data-t="${k2}"]`).setAttribute('aria-pressed', String(!!n[k2]));
       $('#mm-sizelbl').textContent = n.size.toUpperCase();
       $('#mm-foldlbl').textContent = n.collapsed ? 'Expand' : 'Collapse';
-      $('[data-t="fold"]').disabled = !kids(n.id).length;
+      $('[data-t="fold"]').disabled = !kids(n.id).length; $('#mm-detach').disabled = !n.parent;
     }
     if (selLink) { const l = map.links.find(x => x.id === selLink); if (l) $('#sw-link').style.background = l.color || '#ffd166'; }
     $('#mm-banner').hidden = !linkFrom;
@@ -360,6 +362,24 @@ export async function openEditor(id, ctx) {
     const n = { id: uid(), parent: null, x: Math.round(x), y: Math.round(y), text: '', size: 'l', bg: null, fg: null, line: null, b: true, i: false, u: false, list: false, collapsed: false };
     map.nodes.push(n); startEdit(n.id, true);
   }
+  // A new, unconnected main topic near the middle of the screen, in free space.
+  function newTopic() {
+    if (editing) finishEdit(); linkFrom = null; closePop(); closeMenu();
+    const [cx, cy] = center(); const wx = (cx - tx) / k, wy = (cy - 40 - ty) / k;
+    const h = hiddenSet(), est = { w: 200, h: 70 };
+    const free = (x, y) => !map.nodes.some(m => !h.has(m.id) && Math.abs(m.x - x) < (sz(m).w + est.w) / 2 + 90 && Math.abs(m.y - y) < (sz(m).h + est.h) / 2 + 70);
+    let px = wx, py = wy;
+    outer: for (let r = 0; r < 40; r++) {
+      const steps = r ? 8 + r * 4 : 1;
+      for (let i = 0; i < steps; i++) { const a = i / steps * Math.PI * 2 + Math.PI / 2; const x = wx + Math.cos(a) * r * 70, y = wy + Math.sin(a) * r * 50; if (free(x, y)) { px = x; py = y; break outer; } }
+    }
+    addRoot(px, py); const n = map.nodes[map.nodes.length - 1]; centerOn(n);
+  }
+  function detach(id) {
+    const n = byId(id); if (!n || !n.parent) return;
+    n.parent = null; if (n.size === 's' || n.size === 'm') n.size = 'l'; n.b = true;
+    commit(); renderAll(); toast('Now a main topic');
+  }
   function addChild(pid) {
     if (editing) finishEdit();
     const p = byId(pid); if (!p) return;
@@ -380,7 +400,7 @@ export async function openEditor(id, ctx) {
   async function delNode(id) {
     const n = byId(id); if (!n) return; if (editing) finishEdit();
     const sub = desc(id); const nm = plain(n.text).slice(0, 60) || 'this bubble';
-    const ok = sub.length || n.text ? await confirmDialog(n.parent ? 'Delete this bubble?' : 'Delete the central subject?',
+    const ok = sub.length || n.text ? await confirmDialog(n.parent ? 'Delete this bubble?' : 'Delete this main topic?',
       `“${nm}”${sub.length ? ` and the ${sub.length} bubble${sub.length === 1 ? '' : 's'} under it` : ''} will be removed. You can undo this.`, 'Delete', true) : true;
     if (!ok) return;
     const gone = new Set([id, ...sub.map(s => s.id)]);
@@ -398,8 +418,9 @@ export async function openEditor(id, ctx) {
   // ---------- pointer: tap / drag / pan / pinch ----------
   const ptrs = new Map(); let g = null;
   stage.addEventListener('pointerdown', e => {
-    if (e.button > 0 || e.target.closest('.mm-plus,.mm-badge,.mm-zoom,.mm-banner')) return;
+    if (e.button > 0 || e.target.closest('.mm-plus,.mm-badge,.mm-zoom,.mm-banner,.mm-newtopic')) return;
     ptrs.set(e.pointerId, [e.clientX, e.clientY]);
+    if (g && g.lp) { clearTimeout(g.lp); g.lp = null; }
     if (ptrs.size === 2) {
       const [[ax, ay], [bx, by]] = [...ptrs.values()]; const r = stage.getBoundingClientRect();
       const mx = (ax + bx) / 2 - r.left, my = (ay + by) / 2 - r.top;
@@ -409,7 +430,16 @@ export async function openEditor(id, ctx) {
     if (ptrs.size > 2) return;
     const nodeEl = e.target.closest('.mm-node'), linkEl = e.target.closest('.mm-linkhit');
     g = { type: nodeEl ? 'node' : linkEl ? 'link' : 'bg', id: nodeEl ? nodeEl.dataset.id : linkEl ? linkEl.dataset.link : null, sx: e.clientX, sy: e.clientY, tx0: tx, ty0: ty, moved: false };
+    if (g.type === 'bg' && ptrs.size === 1) {
+      const gg = g, cx = e.clientX, cy = e.clientY;
+      gg.lp = setTimeout(() => { // long-press on empty canvas = new main topic right there
+        gg.lp = null; if (g !== gg || gg.moved || ptrs.size !== 1) return;
+        gg.long = true; linkFrom = null; if (navigator.vibrate) try { navigator.vibrate(15); } catch { }
+        const [x, y] = toWorld(cx, cy); addRoot(x, y);
+      }, 500);
+    }
   });
+  stage.addEventListener('contextmenu', e => e.preventDefault());
   const onMove = e => {
     if (!ptrs.has(e.pointerId) || !g) return; ptrs.set(e.pointerId, [e.clientX, e.clientY]);
     if (g.type === 'pinch') {
@@ -420,7 +450,7 @@ export async function openEditor(id, ctx) {
     const dx = e.clientX - g.sx, dy = e.clientY - g.sy;
     if (!g.moved && Math.hypot(dx, dy) < 8) return;
     if (!g.moved) {
-      g.moved = true;
+      g.moved = true; if (g.lp) { clearTimeout(g.lp); g.lp = null; }
       if (g.type === 'node') { const n = byId(g.id); const group = [n, ...(map.moveKids ? desc(n.id) : [])]; g.start = group.map(m => [m, m.x, m.y]); stage.classList.add('dragging'); }
     }
     if (g.type === 'node') {
@@ -433,6 +463,8 @@ export async function openEditor(id, ctx) {
     if (!g) return;
     if (g.type === 'pinch') { if (!ptrs.size) { g = null; schedule(true); } return; }
     const gg = g; g = null; stage.classList.remove('dragging');
+    if (gg.lp) { clearTimeout(gg.lp); gg.lp = null; }
+    if (gg.long) return;
     if (e.type === 'pointercancel') { if (gg.moved && gg.type === 'node') commit(); return; }
     if (gg.moved) { if (gg.type === 'node') { commit(); renderAll(); } else schedule(true); return; }
     tap(gg, e);
@@ -520,6 +552,7 @@ export async function openEditor(id, ctx) {
     if (t === 'link') { linkFrom = n.id; closePop(); renderAll(); toast('Now tap the bubble to link to'); return; }
     if (t === 'fold') return toggleFold(n.id);
     if (t === 'del') return delNode(n.id);
+    if (t === 'detach') return detach(n.id);
     if (t === 'bg') return palette('Bubble color', BUBBLE, n.bg || DEF_BG, c => { n.bg = c; });
     if (t === 'fg') return palette('Text color', TEXT, n.fg || DEF_FG, c => { n.fg = c; });
     if (t === 'line') return palette('Branch line color (applies to this branch)', LINE, lineOf(n), c => { n.line = c; });
@@ -537,6 +570,7 @@ export async function openEditor(id, ctx) {
   title.onclick = async () => { const t = await promptDialog('Rename map', map.title, 'Save', 'Map title'); if (t) { map.title = t; title.textContent = t; schedule(); } };
   $('#mm-back').onclick = () => { location.hash = '#/maps'; };
   $('#mm-undo').onclick = undo; $('#mm-redo').onclick = redo;
+  $('#mm-newtopic').onclick = () => newTopic();
   $('#mm-zin').onclick = () => { const [cx, cy] = center(); zoomAt(k * 1.25, cx, cy); };
   $('#mm-zout').onclick = () => { const [cx, cy] = center(); zoomAt(k / 1.25, cx, cy); };
   $('#mm-fit').onclick = fit;
@@ -637,7 +671,7 @@ export async function openEditor(id, ctx) {
   async function showHint(force) {
     const s = await store.getSettings(); if (s.mmHintSeen && !force) return;
     const o = ctx.modal(`<div class="dialog mm-hint" role="dialog" aria-modal="true" aria-labelledby="mm-hint-h"><h3 id="mm-hint-h">Mind map basics</h3>
-      <ul><li><b>Tap</b> the blue canvas to add your central subject.</li><li><b>Tap a bubble</b> to select it, then the round <b>+</b> adds a connected idea.</li>
+      <ul><li><b>Tap</b> the blue canvas to add your central subject.</li><li>Need a separate idea? Tap <b>New topic</b> (bottom left) or <b>press and hold</b> an empty spot to start another main bubble.</li><li><b>Tap a bubble</b> to select it, then the round <b>+</b> adds a connected idea.</li>
       <li><b>Drag</b> a bubble to move it (its branch comes along). Drag the background to pan, pinch to zoom.</li>
       <li><b>Link</b> joins any two bubbles with a dashed arrow. <b>Double-tap</b> to edit text.</li><li>Everything saves automatically on this phone.</li></ul>
       <div class="row"><button class="btn primary" id="mm-hint-ok" type="button">Got it</button></div></div>`);

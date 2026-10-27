@@ -2,7 +2,7 @@ import * as store from './store.js';
 import { STATUSES, FILE_TYPES } from './store.js';
 import * as mm from './mindmap.js';
 
-const VERSION = '1.1.0';
+const VERSION = '1.1.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const view = $('#view');
