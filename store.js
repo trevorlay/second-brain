@@ -153,14 +153,36 @@ export async function saveMap(m) {
 export async function deleteMap(id) {
   const db = await openDB(); const tx = db.transaction('maps', 'readwrite'); tx.objectStore('maps').delete(id); await done(tx);
 }
+// ---------- prompt history (v1.2.0) ----------
+// Kept as one record {key:'prompts', value:[...]} in the existing 'settings' store, so no DB version bump
+// or migration is needed and 1.1.x data is untouched.
+const MAX_PROMPTS = 300;
+function normPrompt(p) {
+  const s = (v, n) => String(v ?? '').slice(0, n);
+  return { id: s(p.id || uid(), 64), mapId: p.mapId ? s(p.mapId, 64) : null, mapTitle: s(p.mapTitle, 120), parentId: p.parentId ? s(p.parentId, 64) : null, childId: p.childId ? s(p.childId, 64) : null,
+    parentText: s(p.parentText, 500), childText: s(p.childText, 500), path: (Array.isArray(p.path) ? p.path : []).slice(0, 60).map(x => s(x, 500)),
+    related: (Array.isArray(p.related) ? p.related : []).slice(0, 40).map(x => s(x, 600)), type: ['image', 'code', 'text'].includes(p.type) ? p.type : 'text',
+    prompt: s(p.prompt, 20000), date: p.date || now(), updatedAt: p.updatedAt || p.date || now() };
+}
+export async function listPrompts() {
+  const rec = await get('settings', 'prompts'); const v = rec && Array.isArray(rec.value) ? rec.value : [];
+  return v.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+}
+async function putPrompts(list) { await put('settings', { key: 'prompts', value: list.slice(0, MAX_PROMPTS) }); }
+export async function savePrompt(p) {
+  const rec = normPrompt({ ...p, updatedAt: now() }); const list = (await listPrompts()).filter(x => x.id !== rec.id);
+  list.unshift(rec); list.sort((a, b) => (b.date || '').localeCompare(a.date || '')); await putPrompts(list); return rec;
+}
+export async function deletePrompt(id) { await putPrompts((await listPrompts()).filter(x => x.id !== id)); }
+
 export async function dbInfo() {
   const db = await openDB(); return { version: db.version, stores: [...db.objectStoreNames] };
 }
 
 export async function exportAll() {
-  const [entries, projects, settings, maps] = await Promise.all([listEntries(), listProjects(), getSettings(), listMaps()]);
+  const [entries, projects, settings, maps, prompts] = await Promise.all([listEntries(), listProjects(), getSettings(), listMaps(), listPrompts()]);
   const { lastProjectId, lastApp, lastBotName, seeded, mmHintSeen, ...portable } = settings;
-  return { app: 'second-brain', schema: SCHEMA, exportedAt: now(), entries, projects, maps, settings: portable };
+  return { app: 'second-brain', schema: SCHEMA, exportedAt: now(), entries, projects, maps, prompts, settings: portable };
 }
 
 // mode: 'merge' (keep the newer copy of each item by updatedAt) or 'replace' (wipe, then load).
@@ -199,5 +221,12 @@ export async function importAll(data, mode = 'merge') {
   if (mode === 'replace' && s.theme) patch.theme = s.theme;
   if (s.lastBackup && (!cur.lastBackup || s.lastBackup > cur.lastBackup)) patch.lastBackup = s.lastBackup;
   await saveSettings(patch);
-  return { added, updated, total: data.entries.length, maps: maps.length };
+  // Prompt history (v1.2.0+ backups). Older backups have none: keep what is on the phone.
+  const prompts = Array.isArray(data.prompts) ? data.prompts.filter(x => x && x.id && typeof x.prompt === 'string') : null;
+  if (prompts) {
+    const cur = mode === 'replace' ? new Map() : new Map((await listPrompts()).map(x => [x.id, x]));
+    for (const x of prompts) if (newerOf(x, cur.get(x.id))) cur.set(x.id, normPrompt(x));
+    await putPrompts([...cur.values()].sort((a, b) => (b.date || '').localeCompare(a.date || '')));
+  }
+  return { added, updated, total: data.entries.length, maps: maps.length, prompts: prompts ? prompts.length : 0 };
 }

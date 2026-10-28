@@ -3,6 +3,7 @@
 // User text is only ever written with textContent (never innerHTML); colors are validated hex.
 import * as store from './store.js';
 import { uid } from './store.js';
+import * as pb from './prompt.js';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 const okCol = c => (typeof c === 'string' && HEX.test(c) ? c : null);
@@ -26,6 +27,7 @@ const I = {
   trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
   fit: '<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
   x: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  wand: '<svg viewBox="0 0 24 24"><path d="m4 20 11-11"/><path d="m13 7 4 4"/><path d="M18 3v3M16.5 4.5h3M20 9v2M19 10h2M9 3v2M8 4h2"/></svg>',
   map: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="4.5" cy="6" r="2"/><circle cx="19.5" cy="6" r="2"/><circle cx="19.5" cy="18" r="2"/><path d="M9.5 10.5 6.2 7.2M14.5 10.5l3.3-3.3M14.5 13.5l3.3 3.3"/></svg>',
 };
 
@@ -67,7 +69,7 @@ export async function renderMaps(ctx) {
   if (!/^#\/maps/.test(location.hash)) return;
   view.innerHTML = `<div class="row"><h1 class="spacer">Mind Maps</h1><button class="btn primary" id="mm-new" type="button">+ New map</button></div>
     <div class="searchbox">${I.find}<input id="mm-q" type="search" placeholder="Search maps by title" aria-label="Search maps by title" autocomplete="off" value="${esc(listQuery)}"></div>
-    <div class="row mm-listtools"><button class="btn" id="mm-import" type="button">Import map (.json)</button><input type="file" id="mm-importfile" accept="application/json,.json" hidden></div>
+    <div class="row mm-listtools"><button class="btn" id="mm-import" type="button">Import map (.json)</button><button class="btn" id="mm-phist" type="button">${I.wand} Prompt history</button><input type="file" id="mm-importfile" accept="application/json,.json" hidden></div>
     <div id="mm-list"></div>`;
   const draw = () => {
     const q = listQuery.trim().toLowerCase();
@@ -83,6 +85,7 @@ export async function renderMaps(ctx) {
   draw();
   const q = view.querySelector('#mm-q'); q.oninput = () => { listQuery = q.value; draw(); };
   view.querySelector('#mm-new').onclick = () => newMap(ctx);
+  view.querySelector('#mm-phist').onclick = () => pb.openHistory(ctx);
   view.querySelector('#mm-import').onclick = () => view.querySelector('#mm-importfile').click();
   view.querySelector('#mm-importfile').onchange = async ev => {
     const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
@@ -142,6 +145,7 @@ export async function openEditor(id, ctx) {
     <div class="mm-world" id="mm-world"><svg class="mm-svg" id="mm-svg" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"></svg><div id="mm-nodes"></div></div>
     <div class="mm-empty" id="mm-empty"><b>Tap anywhere</b> to add your central subject</div>
     <div class="mm-banner" id="mm-banner" hidden><span>Tap another bubble to link to</span><button class="btn" id="mm-linkcancel" type="button">Cancel</button></div>
+    <div class="mm-banner mm-pbanner" id="mm-pbanner" role="status" aria-live="polite" hidden><span id="mm-pmsg"></span><button class="btn" id="mm-pchange" type="button" hidden>Change parent</button><button class="btn" id="mm-pcancel" type="button">Cancel</button></div>
     <button class="mm-newtopic" id="mm-newtopic" type="button" aria-label="New topic: add a separate main bubble">${I.plus}<span>New topic</span></button>
     <div class="mm-zoom"><button type="button" id="mm-zout" aria-label="Zoom out">−</button><span id="mm-zpct" aria-label="Zoom level">100%</span><button type="button" id="mm-zin" aria-label="Zoom in">+</button><button type="button" id="mm-fit" aria-label="Fit map to screen">${I.fit}</button></div>
   </div>
@@ -152,6 +156,8 @@ export async function openEditor(id, ctx) {
     <button type="button" role="menuitem" data-menu="json">Export map (.json)</button>
     <button type="button" role="menuitem" data-menu="kids" id="mm-kids"></button>
     <button type="button" role="menuitem" data-menu="rename">Rename map</button>
+    <button type="button" role="menuitem" data-menu="prompt">Prompt builder (P)</button>
+    <button type="button" role="menuitem" data-menu="phist">Prompt history</button>
     <button type="button" role="menuitem" data-menu="tips">Show tips</button>
   </div>
   <div class="mm-tools" id="mm-tools" hidden>
@@ -159,6 +165,7 @@ export async function openEditor(id, ctx) {
       <button type="button" data-t="edit" aria-label="Edit text">${I.edit}<span>Edit</span></button>
       <button type="button" data-t="child" aria-label="Add child bubble">${I.plus}<span>Child</span></button>
       <button type="button" data-t="link" aria-label="Link to another bubble">${I.link}<span>Link</span></button>
+      <button type="button" data-t="prompt" aria-label="Prompt builder: make an AI prompt from a parent to a child bubble (P)">${I.wand}<span>Prompt</span></button>
       <button type="button" data-t="fold" aria-label="Collapse or expand branch">${I.fold}<span id="mm-foldlbl">Collapse</span></button>
       <button type="button" data-t="detach" id="mm-detach" aria-label="Make main topic: detach this branch into its own topic">${I.fit}<span>Main topic</span></button>
       <button type="button" data-t="del" class="danger" aria-label="Delete bubble and its branch">${I.trash}<span>Delete</span></button>
@@ -186,6 +193,7 @@ export async function openEditor(id, ctx) {
   const ta = $('#mm-text');
 
   // ---------- state ----------
+  let pick = null; // prompt pick mode: {phase:'parent'|'child', parent}
   let sel = null, selLink = null, linkFrom = null, editing = null, lastTap = { id: null, t: 0 };
   let k = map.view.k || 1, tx = map.view.x, ty = map.view.y;
   const sizes = new Map();
@@ -243,7 +251,7 @@ export async function openEditor(id, ctx) {
     const q = findQ.toLowerCase();
     for (const n of map.nodes) {
       if (h.has(n.id)) continue;
-      const d = el('div', 'mm-node' + (n.parent ? '' : ' root') + (n.id === sel ? ' sel' : '') + (n.id === linkFrom ? ' linkfrom' : '') +
+      const d = el('div', 'mm-node' + (n.parent ? '' : ' root') + (n.id === sel ? ' sel' : '') + (n.id === linkFrom ? ' linkfrom' : '') + (pick && n.id === pick.parent ? ' pickfrom' : '') +
         (q && plain(n.text).toLowerCase().includes(q) ? ' hit' : '') + (n.id === findCur ? ' hitcur' : '') + (n.id === editing?.id ? ' editing' : ''));
       d.dataset.id = n.id; d.tabIndex = 0; d.setAttribute('role', 'button');
       d.setAttribute('aria-label', (plain(n.text) || 'Empty bubble') + (n.collapsed ? `, collapsed, ${desc(n.id).length} hidden` : ''));
@@ -252,7 +260,7 @@ export async function openEditor(id, ctx) {
       if (n.b) d.style.fontWeight = '800'; if (n.i) d.style.fontStyle = 'italic'; if (n.u) d.style.textDecoration = 'underline';
       const t = el('div', 'mm-txt'); richText(t, n, n.parent ? 'New idea' : 'Central subject'); d.appendChild(t);
       if (n.collapsed) { const b = el('button', 'mm-badge', '+' + desc(n.id).length); b.type = 'button'; b.setAttribute('aria-label', 'Expand branch'); b.dataset.expand = n.id; d.appendChild(b); }
-      if (n.id === sel && !linkFrom) {
+      if (n.id === sel && !linkFrom && !pick) {
         const p = byId(n.parent); const left = p && n.x < p.x;
         const b = el('button', 'mm-plus' + (left ? ' left' : '')); b.type = 'button'; b.innerHTML = I.plus; b.setAttribute('aria-label', 'Add child bubble'); d.appendChild(b);
       }
@@ -312,6 +320,41 @@ export async function openEditor(id, ctx) {
     }
     if (selLink) { const l = map.links.find(x => x.id === selLink); if (l) $('#sw-link').style.background = l.color || '#ffd166'; }
     $('#mm-banner').hidden = !linkFrom;
+    const pbn = $('#mm-pbanner'); pbn.hidden = !pick; root.classList.toggle('picking', !!pick);
+    if (pick) {
+      const pn = pick.parent && byId(pick.parent);
+      $('#mm-pmsg').textContent = pick.phase === 'parent' ? 'Prompt: tap the parent (starting point)' : `Parent: “${(plain(pn?.text) || 'bubble').replace(/\s+/g, ' ').slice(0, 28)}”. Now tap the child (goal)`;
+      $('#mm-pchange').hidden = pick.phase !== 'child';
+    }
+  }
+  // ---------- prompt builder ----------
+  function startPick() {
+    if (editing) finishEdit(); linkFrom = null; closePop(); closeMenu();
+    if (!map.nodes.length) { toast('Add some bubbles first'); return; }
+    pick = sel && byId(sel) ? { phase: 'child', parent: sel } : { phase: 'parent', parent: null };
+    selLink = null; renderAll();
+  }
+  function cancelPick() { pick = null; renderAll(); }
+  function pickTap(id) {
+    if (pick.phase === 'parent') { pick = { phase: 'child', parent: id }; sel = id; renderAll(); return; }
+    if (id === pick.parent) { toast('Pick a different bubble for the goal'); return; }
+    const a = pick.parent, b = id; pick = null; sel = b; renderAll(); buildPrompt(a, b);
+  }
+  async function buildPrompt(a, b) {
+    await doSave();
+    const r = pb.findPath(map, a, b);
+    if (r.kind === 'separate') toast('Not connected: using just the two bubbles');
+    pb.openSheet(ctx, { mapId: map.id, mapTitle: map.title, parentId: a, childId: b, parentText: r.path[0], childText: r.path[r.path.length - 1], path: r.path, related: r.related },
+      { onSaveBubble: savePromptBubble, mapId: map.id });
+  }
+  function savePromptBubble(text, e) {
+    if (!root.isConnected) { toast('Open the map to save the bubble'); return false; }
+    const goal = byId(e.childId); if (!goal) { toast('The goal bubble no longer exists'); return false; }
+    let t = '🪄 ' + (pb.TYPES[e.type] || 'AI') + ' prompt\n' + text.trim();
+    const cut = t.length > 2000; if (cut) t = t.slice(0, 1999) + '…';
+    addChild(goal.id, { text: t, size: 's', bg: '#1e293b', fg: '#ffd166', line: null });
+    toast(cut ? 'Saved as bubble (shortened to fit)' : 'Saved as bubble');
+    return true;
   }
   function select(id) { sel = id; selLink = null; closePop(); renderAll(); }
 
@@ -380,7 +423,7 @@ export async function openEditor(id, ctx) {
     n.parent = null; if (n.size === 's' || n.size === 'm') n.size = 'l'; n.b = true;
     commit(); renderAll(); toast('Now a main topic');
   }
-  function addChild(pid) {
+  function addChild(pid, preset = null) {
     if (editing) finishEdit();
     const p = byId(pid); if (!p) return;
     if (p.collapsed) p.collapsed = false;
@@ -394,8 +437,10 @@ export async function openEditor(id, ctx) {
     const h = hiddenSet();
     const clash = yy => map.nodes.some(m => !h.has(m.id) && Math.abs(m.x - x) < (sz(m).w + est.w) / 2 + 14 && Math.abs(m.y - yy) < (sz(m).h + est.h) / 2 + 12);
     for (let g = 0; g < 80 && clash(y); g++) y += 24;
-    const n = { id: uid(), parent: pid, x, y: Math.round(y), text: '', size: 'm', bg: null, fg: null, line: null, b: false, i: false, u: false, list: false, collapsed: false };
-    map.nodes.push(n); startEdit(n.id, true);
+    const n = { id: uid(), parent: pid, x, y: Math.round(y), text: '', size: 'm', bg: null, fg: null, line: null, b: false, i: false, u: false, list: false, collapsed: false, ...(preset || {}) };
+    map.nodes.push(n);
+    if (!preset) return startEdit(n.id, true);
+    sel = n.id; renderAll(); settle(n); commit(); renderAll(); ensureVisible(n);
   }
   async function delNode(id) {
     const n = byId(id); if (!n) return; if (editing) finishEdit();
@@ -451,6 +496,7 @@ export async function openEditor(id, ctx) {
     if (!g.moved && Math.hypot(dx, dy) < 8) return;
     if (!g.moved) {
       g.moved = true; if (g.lp) { clearTimeout(g.lp); g.lp = null; }
+      if (g.type === 'node' && pick) g.type = 'bg';
       if (g.type === 'node') { const n = byId(g.id); const group = [n, ...(map.moveKids ? desc(n.id) : [])]; g.start = group.map(m => [m, m.x, m.y]); stage.classList.add('dragging'); }
     }
     if (g.type === 'node') {
@@ -473,6 +519,7 @@ export async function openEditor(id, ctx) {
   stage.addEventListener('wheel', e => { e.preventDefault(); const r = stage.getBoundingClientRect(); zoomAt(k * Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top); }, { passive: false });
   function tap(gg, e) {
     closePop(); closeMenu();
+    if (pick) { if (gg.type === 'node') pickTap(gg.id); return; }
     if (gg.type === 'node') {
       if (linkFrom) return makeLink(linkFrom, gg.id);
       const now = Date.now();
@@ -502,6 +549,9 @@ export async function openEditor(id, ctx) {
     if ((e.ctrlKey || e.metaKey) && !typing && e.key.toLowerCase() === 'z') { e.preventDefault(); return e.shiftKey ? redo() : undo(); }
     if ((e.ctrlKey || e.metaKey) && !typing && e.key.toLowerCase() === 'y') { e.preventDefault(); return redo(); }
     if (typing || !root.contains(e.target)) return;
+    if (e.key === 'Escape' && pick) { cancelPick(); return; }
+    if (pick && e.key === 'Enter' && e.target.closest('.mm-node')) { e.preventDefault(); pickTap(e.target.closest('.mm-node').dataset.id); return; }
+    if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); return startPick(); }
     if (e.key === 'Escape') { linkFrom = null; sel = null; selLink = null; closePop(); closeMenu(); renderAll(); stage.focus({ preventScroll: true }); return; }
     if (!sel) { if (e.key === 'Enter' && e.target === stage && !map.nodes.length) { const [cx, cy] = center(); addRoot((cx - tx) / k, (cy - ty) / k); e.preventDefault(); } return; }
     if (!e.target.closest('.mm-node,.mm-stage')) return;
@@ -549,6 +599,7 @@ export async function openEditor(id, ctx) {
     if (t !== 'b' && t !== 'i' && t !== 'u' && t !== 'list' && editing && t !== 'bg' && t !== 'fg' && t !== 'line' && t !== 'size') finishEdit();
     if (t === 'edit') return startEdit(n.id);
     if (t === 'child') return addChild(n.id);
+    if (t === 'prompt') return startPick();
     if (t === 'link') { linkFrom = n.id; closePop(); renderAll(); toast('Now tap the bubble to link to'); return; }
     if (t === 'fold') return toggleFold(n.id);
     if (t === 'del') return delNode(n.id);
@@ -575,6 +626,8 @@ export async function openEditor(id, ctx) {
   $('#mm-zout').onclick = () => { const [cx, cy] = center(); zoomAt(k / 1.25, cx, cy); };
   $('#mm-fit').onclick = fit;
   $('#mm-linkcancel').onclick = () => { linkFrom = null; renderAll(); };
+  $('#mm-pcancel').onclick = cancelPick;
+  $('#mm-pchange').onclick = () => { pick = { phase: 'parent', parent: null }; renderAll(); };
   let findQ = '', findCur = null, findList = [];
   const runFind = (step = 0) => {
     findQ = $('#mm-findq').value.trim();
@@ -609,6 +662,8 @@ export async function openEditor(id, ctx) {
     if (m === 'kids') { map.moveKids = !map.moveKids; schedule(); toast('Move children with bubble: ' + (map.moveKids ? 'On' : 'Off')); }
     if (m === 'rename') title.click();
     if (m === 'tips') showHint(true);
+    if (m === 'prompt') startPick();
+    if (m === 'phist') { await doSave(); pb.openHistory(ctx, { onSaveBubble: savePromptBubble, mapId: map.id }); }
   };
 
   // ---------- PNG export (drawn on a canvas, no DOM screenshot needed) ----------
@@ -673,7 +728,7 @@ export async function openEditor(id, ctx) {
     const o = ctx.modal(`<div class="dialog mm-hint" role="dialog" aria-modal="true" aria-labelledby="mm-hint-h"><h3 id="mm-hint-h">Mind map basics</h3>
       <ul><li><b>Tap</b> the blue canvas to add your central subject.</li><li>Need a separate idea? Tap <b>New topic</b> (bottom left) or <b>press and hold</b> an empty spot to start another main bubble.</li><li><b>Tap a bubble</b> to select it, then the round <b>+</b> adds a connected idea.</li>
       <li><b>Drag</b> a bubble to move it (its branch comes along). Drag the background to pan, pinch to zoom.</li>
-      <li><b>Link</b> joins any two bubbles with a dashed arrow. <b>Double-tap</b> to edit text.</li><li>Everything saves automatically on this phone.</li></ul>
+      <li><b>Link</b> joins any two bubbles with a dashed arrow. <b>Double-tap</b> to edit text.</li><li><b>Prompt</b> (toolbar, or press <b>P</b>): tap a parent (starting point) then a child (goal) to get a ready-to-paste AI prompt for Image, Code or Text. Saved in <b>Prompt history</b>.</li><li>Everything saves automatically on this phone.</li></ul>
       <div class="row"><button class="btn primary" id="mm-hint-ok" type="button">Got it</button></div></div>`);
     o.querySelector('#mm-hint-ok').onclick = () => { o.remove(); store.saveSettings({ mmHintSeen: true }); };
   }
@@ -686,7 +741,7 @@ export async function openEditor(id, ctx) {
   if (!map.view.x && !map.view.y) fit(); else applyView();
   showHint(false);
   // test/debug hook (read-only snapshot)
-  root.mmDebug = { get map() { return JSON.parse(JSON.stringify(map)); }, get view() { return { tx, ty, k }; }, hist: () => hist.length };
+  root.mmDebug = { get pick() { return pick && { ...pick }; }, get map() { return JSON.parse(JSON.stringify(map)); }, get view() { return { tx, ty, k }; }, hist: () => hist.length };
   return async function cleanup() {
     removeEventListener('pointermove', onMove); removeEventListener('pointerup', onUp); removeEventListener('pointercancel', onUp);
     removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onHide); removeEventListener('pagehide', doSave);
