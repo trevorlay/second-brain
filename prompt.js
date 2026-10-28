@@ -2,7 +2,7 @@
 // plus the result sheet and the prompt history view. User text is only ever inserted with textContent / .value.
 import * as store from './store.js';
 
-export const TYPES = { image: 'Image', code: 'Code', text: 'Text/General' };
+export const TYPES = { image: 'Image', music: 'Music', code: 'Code', text: 'Text', plan: 'Plan' };
 // Strip **bold**, *italic*, __underline__ and "- " bullets; collapse to one line.
 export const clean = t => String(t || '').split('\n').map(l => l.replace(/^\s*[-•]\s+/, '').trim()).filter(Boolean).join('; ')
   .replace(/\*\*(.+?)\*\*/g, '$1').replace(/__(.+?)__/g, '$1').replace(/\*(.+?)\*/g, '$1').replace(/\s+/g, ' ').trim();
@@ -13,15 +13,20 @@ const KW = {
   code: ['code', 'coding', 'app', 'apps', 'script', 'scripts', 'function', 'functions', 'bug', 'bugs', 'build', 'api', 'apis', 'program', 'website', 'web app',
     'plugin', 'bot', 'database', 'sql', 'python', 'javascript', 'typescript', 'react', 'android', 'ios', 'unity', 'godot', 'lua', 'deploy', 'backend', 'frontend', 'pwa'],
 };
+KW.music = ['music', 'track', 'tracks', 'song', 'songs', 'loop', 'loops', 'soundtrack', 'soundtracks', 'sound', 'sounds', 'sfx', 'audio', 'beat', 'beats', 'theme song', 'ambient', 'ost', 'jingle', 'melody'];
+KW.plan = ['plan', 'plans', 'roadmap', 'steps', 'how do i', 'how to', 'strategy', 'schedule', 'timeline', 'milestones'];
+KW.text = ['write', 'description', 'descriptions', 'copy', 'post', 'posts', 'email', 'story', 'blog', 'article', 'caption', 'captions', 'bio', 'tagline', 'slogan', 'newsletter', 'letter', 'summary', 'pitch', 'announcement', 'listing', 'dialogue', 'lyrics'];
 const has = (txt, w) => new RegExp('(^|[^a-z0-9])' + w.replace(/ /g, '\\s+') + '($|[^a-z0-9])', 'i').test(txt);
 const score = (txt, t) => KW[t].reduce((s, w) => s + (has(txt, w) ? 1 : 0), 0);
+// Child bubble (the deliverable) weighs most; the rest of the path breaks ties. Plan wins only when the child asks for one.
 export function guessType(path) {
   const child = path[path.length - 1] || '', all = path.join(' \n ');
-  const s = t => score(child, t) * 2 + score(all, t);
-  const si = s('image'), sc = s('code');
-  if (!si && !sc) return 'text';
-  if (si === sc) return score(child, 'image') >= score(child, 'code') ? 'image' : 'code';
-  return si > sc ? 'image' : 'code';
+  if (score(child, 'plan')) return 'plan';
+  const order = ['music', 'image', 'code', 'text'];
+  const sc = t => score(child, t) * 10 + score(all, t);
+  let best = 'text', bs = 0;
+  for (const t of order) { const v = sc(t); if (v > bs) { bs = v; best = t; } }
+  return best;
 }
 
 // ---------- path finding over the map (tree first, then links) ----------
@@ -99,18 +104,53 @@ function textRole(all) {
   return 'expert advisor and practical planner';
 }
 
+const GAMEW = ['game', 'games', 'match', 'match-3', 'match 3', 'puzzle', 'level', 'levels', 'player', 'sprite', 'sprites', 'rpg', 'platformer', 'godot', 'unity', 'roblox'];
+const isGame = all => GAMEW.some(w => has(all, w));
+const NUMW = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12, a: 1 };
+function trackCount(txt) {
+  const m = txt.match(/(?:at\s+least\s+|about\s+|around\s+|maybe\s+)?(\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve)\s+(?:more\s+|new\s+|extra\s+|different\s+)*(?:background\s+|music\s+|bgm\s+|looping\s+|game\s+)*(tracks?|songs?|loops?|themes?|pieces?|tunes?)/i);
+  if (!m) return null; const n = /^\d+$/.test(m[1]) ? +m[1] : NUMW[m[1].toLowerCase()]; return Math.max(1, Math.min(n || 1, 12));
+}
+function musicTheme(all) {
+  const f = w => has(all, w);
+  if (['halloween', 'spooky', 'dracula', 'werewolf', 'ghost', 'ghosts', 'pumpkin', 'pumpkins', 'witch', 'haunted', 'vampire', 'zombie'].some(f))
+    return { sure: true, theme: 'spooky but fun Halloween casual game', genre: 'playful spooky orchestral-pop for a casual mobile game', inst: 'pizzicato strings, celesta / music box, harpsichord, bassoon, light organ, soft choir "oohs", marimba, light hand percussion and finger snaps', key: 'minor keys (e.g. D minor, A minor) with a cheeky, bouncy feel', bpm: '100–125 BPM' };
+  if (['lantern', 'latern', 'lanterns', 'candle', 'night', 'moon'].some(f))
+    return { sure: false, theme: 'spooky but fun Halloween / glowing-lantern casual game', genre: 'whimsical, playful spooky casual-game music (orchestral-pop)', inst: 'pizzicato strings, celesta / music box, marimba, harpsichord, bassoon, soft choir pads and light percussion', key: 'minor keys with a bouncy, cheeky feel (e.g. D minor, E minor)', bpm: '100–125 BPM' };
+  if (['cozy', 'cute', 'farm', 'garden', 'cafe'].some(f)) return { sure: true, theme: 'cozy, cute casual game', genre: 'cozy lo-fi acoustic / light orchestral', inst: 'acoustic guitar, ukulele, glockenspiel, soft piano, light shakers', key: 'major keys (C, F, G major)', bpm: '85–110 BPM' };
+  if (['space', 'sci-fi', 'cyber', 'neon', 'robot'].some(f)) return { sure: true, theme: 'sci-fi / synthwave game', genre: 'synthwave / chiptune-electronic', inst: 'analog synth pads, arpeggiated synths, punchy electronic drums, synth bass', key: 'minor keys', bpm: '100–128 BPM' };
+  if (['fantasy', 'rpg', 'dragon', 'quest', 'medieval'].some(f)) return { sure: true, theme: 'fantasy adventure game', genre: 'light fantasy orchestral', inst: 'strings, flute, harp, french horn, light percussion', key: 'modal / Dorian flavour', bpm: '90–120 BPM' };
+  return { sure: false, theme: 'casual puzzle game', genre: 'upbeat, light casual-game music', inst: 'marimba, pizzicato strings, glockenspiel, light piano, soft synth pad, light percussion', key: 'mostly major keys with one or two gentle minor-key moods', bpm: '95–120 BPM' };
+}
+const MOODS = [
+  ['Main gameplay loop', 'playful and catchy, steady energy that never gets tiring on repeat', 'middle'],
+  ['Calm / thinking', 'relaxed and mysterious, sparse and airy, good for slow puzzle-solving', 'slower end'],
+  ['Upbeat bonus / combo', 'bright, bouncy and exciting, for streaks, boosters and bonus rounds', 'faster end'],
+  ['Tension / last moves', 'suspenseful but still fun, building urgency for low moves or timers', 'faster end'],
+  ['Menu / map screen', 'warm, inviting and memorable, a light theme-like melody', 'middle'],
+  ['Night / ambient', 'soft, dreamy and atmospheric, minimal percussion', 'slower end'],
+  ['Boss / special level', 'dramatic and driving but still playful', 'faster end'],
+  ['Victory-adjacent', 'cheerful, triumphant and light, without a final ending cadence', 'middle'],
+];
+
 export function generate({ path, related = [], type, mapTitle = '' }) {
   const P = path[0], C = path[path.length - 1], mid = path.slice(1, -1), all = path.join(' \n ') + ' \n ' + related.join(' \n ');
+  const one = path.length < 2;
   const steps = path.map((t, i) => `${i + 1}. ${i === 0 ? 'If' : 'then'} ${t}`).join('\n');
   const rel = related.length ? `\nRelated ideas (linked in my map): ${related.join('; ')}.` : '';
+  const kind = isGame(all) ? 'game' : 'game/project';
+  const proj = one ? '' : `This is for my ${kind} ${q(P)}.`;
+  const midLine = mid.length ? ` It sits under ${mid.map(q).join(' → ')} in my plan.` : '';
   const ctxLine = `${mapTitle ? `From my mind map “${mapTitle}”: ` : ''}${chainText(path)}.`;
+  const deliver = cap(C.replace(VERB, '')) || cap(C);
   if (type === 'image') {
-    const o = imageStyle(all); const subject = cap(C.replace(VERB, '')) || cap(C);
-    const theme = mid.length ? ` for ${mid.join(', ')}` : '';
+    const o = imageStyle(all); let subj = deliver;
+    const sm = subj.match(/^(.*?)(\w+) for (\w+?)s?$/i); if (sm && sm[3].length > 2) subj = cap(`${sm[1]}${sm[3].toLowerCase()} ${sm[2]}`);
+    const where = (mid.length ? ` for ${mid[mid.length - 1]}` : '') + (one ? '' : `, part of ${P}`);
     return [
-      `${cap(o.style.split(',')[0])}: ${subject}${theme}.`,
+      `${cap(o.style.split(',')[0])}: ${subj}${where}.`,
       ``,
-      `Subject: ${subject}${theme} — the goal is ${q(C)}, starting from ${q(P)}.`,
+      `Subject: ${subj}${where}.${proj ? ' ' + proj : ''}`,
       `Context: ${ctxLine}${rel}`,
       `Style & medium: ${o.style}.`,
       `Composition: ${o.comp}.`,
@@ -124,44 +164,81 @@ export function generate({ path, related = [], type, mapTitle = '' }) {
       `Negative prompt: ${o.neg.join(', ')}.`,
     ].join('\n');
   }
+  if (type === 'music') {
+    const th = musicTheme(all); const n = trackCount(path.slice(1).join(' \n ')) || trackCount(all) || 1;
+    const themeTxt = th.sure ? `The theme is a ${th.theme}.` : `If the ${kind === 'game' ? "game's" : "project's"} theme is a ${th.theme}, lean into that; otherwise keep it fitting for a ${th.theme === 'casual puzzle game' ? 'casual puzzle game' : 'casual puzzle game'}.`;
+    const list = Array.from({ length: n }, (_, i) => { const m = MOODS[i % MOODS.length]; return `Track ${i + 1}: “${m[0]}”: ${m[1]}; tempo at the ${m[2]} of the range.`; }).join('\n');
+    return [
+      `Compose ${n === 1 ? 'one original instrumental background music track' : `${n} original instrumental background music tracks`} that loop seamlessly${proj ? ` for my ${kind} ${q(P)}` : ''}.`,
+      ``,
+      `What to make: ${n === 1 ? 'one background music track' : `${n} new background music tracks`} (my note: ${q(C)}).${n > 1 ? ` ${n} separate tracks, each with its own mood (described below), all clearly from the same soundtrack.` : ''}`,
+      `Project context: ${proj || 'Background music for my project.'}${midLine} ${themeTxt}${rel}`,
+      ``,
+      n > 1 ? `Tracks:\n${list}` : `Track: ${MOODS[0][1]}.`,
+      ``,
+      `Genre & style: ${th.genre}.`,
+      `Mood: fun and inviting, never stressful or annoying when heard many times in a row.`,
+      `Tempo: ${th.bpm}, steady tempo with no tempo changes inside a track.`,
+      `Key: ${th.key}; keep each track in one key.`,
+      `Instruments: ${th.inst}. Instrumental only, no vocals.`,
+      `Structure: short intro-free loop body, A section then B section (e.g. 8 + 8 bars) then back to A; a simple, memorable motif shared across the tracks.`,
+      `Length: 60–120 seconds per track.`,
+      `Seamless loop: the end must flow straight back into the start; matching tempo, key, instrumentation and energy at the loop point; no fade-in or fade-out; no ending cadence; no reverb or delay tail cut off at the end (let tails wrap into the start); loop point exactly on a bar boundary; instrumental with no vocals.`,
+      `Mixing: sits in the background under gameplay; moderate, even loudness (around -16 LUFS), gentle low end, leave room in the mids and highs for sound effects (matches, combos, UI clicks).`,
+      `Export: WAV (or high-quality OGG), 44.1 kHz, 16-bit stereo, one file per track, named by track title.`,
+      ``,
+      `Avoid: vocals or lyrics, abrupt endings, fades, silence at the start or end, clipping or distortion, overly busy or shrill melodies, sudden loud hits, copying existing songs.`,
+    ].join('\n');
+  }
   if (type === 'code') {
     const lang = langOf(all);
     return [
-      `Role: You are a senior software engineer who writes clean, well-tested, production-ready code.`,
+      `Role: You are a senior software engineer. Write the complete, working code for this now.`,
       ``,
-      `Goal: ${C}.`,
+      `Goal: ${deliver}.${proj ? ' ' + proj : ''}${midLine}`,
       ``,
       `Context (if this, then that):\n${steps}${rel}`,
-      `Start from ${q(P)} and treat every step above as a requirement that the next step builds on.`,
       ``,
-      `Tech / language: ${lang ? `${lang}. Stick to it and its standard library unless a dependency clearly saves effort (say why).` : 'not decided yet. Recommend the simplest suitable language/stack in one line and why, then use it.'}`,
+      `Tech / language: ${lang ? `${lang}. Stick to it and its standard library unless a dependency clearly saves effort (say why).` : 'not decided yet. Pick the simplest suitable language/stack (one line why) and use it.'}`,
       ``,
       `Requirements:\n- Do exactly what the goal says; keep scope tight (no extra features).\n- Small, readable functions with clear names and short comments where the logic is not obvious.\n- Handle errors and invalid input gracefully with helpful messages.\n- No secrets or API keys in code; read config from environment or settings.`,
       ``,
-      `Edge cases & tests: list the edge cases you considered (empty input, very large input, bad or missing data, offline/network failure, duplicates), and include unit tests for the main path and each edge case.`,
+      `Edge cases & tests: handle empty input, very large input, bad or missing data, offline/network failure and duplicates, and include unit tests for the main path and each edge case.`,
       ``,
-      `Output format:\n1. A 2–3 sentence plan.\n2. The complete code in fenced code blocks, one per file, with the file name above each.\n3. The tests.\n4. How to run it, step by step.\n5. Known limitations and next steps.`,
+      `Output format: output the full code, ready to paste: every file complete in its own fenced code block with the file name above it (no placeholders, no "..." or "rest stays the same"), then the tests, then short run instructions. If something is ambiguous, state your assumption in one line and continue.`,
+    ].join('\n');
+  }
+  if (type === 'plan') {
+    return [
+      `Role: You are an ${textRole(all)}.`,
       ``,
-      `If anything important is ambiguous (platform, inputs/outputs, data format), ask me up to 3 clarifying questions before writing code; otherwise state your assumptions and proceed.`,
+      `Goal: ${C}.`,
+      ``,
+      `Starting point: ${P}.${proj ? ' ' + proj : ''}`,
+      `Context (if this, then that):\n${steps}${rel}`,
+      ``,
+      `Task: Give me the most effective step-by-step way to get from ${q(P)} to ${q(C)}. Follow the chain in order, use each step as a stepping stone, and point out any missing step between them.`,
+      ``,
+      `Steps: for each step give the action, why it matters, the tools or resources to use, the expected output, and how I know it is done.`,
+      ``,
+      `Constraints: be specific and practical, prefer free or low-cost options, avoid generic advice, keep it to what actually moves me toward the goal, and flag any assumptions.`,
+      ``,
+      `Output format:\n1. One-sentence summary of the approach.\n2. Numbered steps (as above).\n3. Quick start: the first action I can take today in under 30 minutes.\n4. Risks or common mistakes and how to avoid them.`,
+      ``,
+      `Before you start: if anything important is unclear (audience, budget, tools, deadline), ask me up to 3 clarifying questions first; otherwise state your assumptions and proceed.`,
     ].join('\n');
   }
   return [
-    `Role: You are an ${textRole(all)}.`,
+    `Write this for me now: ${deliver}.`,
     ``,
-    `Goal: ${C}.`,
+    `Project context: ${proj || 'For my own project.'}${midLine}`,
+    `Background: ${ctxLine}${rel}`,
     ``,
-    `Starting point: ${P}.`,
-    `Context (if this, then that):\n${steps}${rel}`,
+    `You are a ${textRole(all).replace('expert advisor and practical planner', 'skilled professional writer')}. Write the finished piece itself, not a plan or an outline and not tips on how to write it.`,
+    `Tone: clear, warm and specific to ${one ? 'this' : q(P)}; no generic filler or clichés.`,
+    `Length & format: whatever fits the piece (e.g. a store description: a hook line, 3–5 short benefit bullets, a closing call to action); use headings or bullets only where they help.`,
     ``,
-    `Task: Give me the most effective step-by-step way to get from ${q(P)} to ${q(C)}. Follow the chain in order, use each step as a stepping stone, and point out any missing step between them.`,
-    ``,
-    `Steps: for each step give the action, why it matters, the tools or resources to use, the expected output, and how I know it is done.`,
-    ``,
-    `Constraints: be specific and practical, prefer free or low-cost options, avoid generic advice, keep it to what actually moves me toward the goal, and flag any assumptions.`,
-    ``,
-    `Output format:\n1. One-sentence summary of the approach.\n2. Numbered steps (as above).\n3. Quick start: the first action I can take today in under 30 minutes.\n4. Risks or common mistakes and how to avoid them.`,
-    ``,
-    `Before you start: if anything important is unclear (audience, budget, tools, deadline), ask me up to 3 clarifying questions first; otherwise state your assumptions and proceed.`,
+    `Output only the final text, ready to paste. If a detail is missing (name, price, link), use a clear [placeholder] instead of asking. Then add up to 2 alternative versions of the opening line.`,
   ].join('\n');
 }
 

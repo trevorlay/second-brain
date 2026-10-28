@@ -2,7 +2,7 @@
 // Bump CACHE_VERSION on every deploy. Strategy: network-first for the app's own files
 // (so a reload while online always picks up the newest version), falling back to the
 // versioned cache when offline. Old caches are deleted on activate.
-const CACHE_VERSION = 'v1.2.0';
+const CACHE_VERSION = 'v1.2.1';
 const CACHE = 'second-brain-' + CACHE_VERSION;
 const SHELL = [
   './', './styles.css', './app.js', './store.js', './mindmap.js', './prompt.js', './manifest.json',

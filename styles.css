@@ -364,3 +364,7 @@ body.mm-open { overflow: hidden; overscroll-behavior: none; }
 .pbh-prev { font-size: 13px; color: #dbe7ff; white-space: pre-wrap; max-height: 4.4em; overflow: hidden; }
 .pbh-item .acts { display: flex; gap: 8px; margin-top: 8px; } .pbh-item .acts .btn { flex: 1; min-height: 44px; }
 .pb-offscreen { position: fixed; top: 0; left: -9999px; opacity: 0; }
+
+/* v1.2.1 */
+.pb-types .chip { flex: 1 1 auto; padding: 0 12px; min-width: 64px; }
+.pbh-type.t-music { background: #c77dff; } .pbh-type.t-plan { background: #ffd166; color: #1e293b; }
