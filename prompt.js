@@ -14,15 +14,16 @@ const KW = {
     'plugin', 'bot', 'database', 'sql', 'python', 'javascript', 'typescript', 'react', 'android', 'ios', 'unity', 'godot', 'lua', 'deploy', 'backend', 'frontend', 'pwa'],
 };
 KW.music = ['music', 'track', 'tracks', 'song', 'songs', 'loop', 'loops', 'soundtrack', 'soundtracks', 'sound', 'sounds', 'sfx', 'audio', 'beat', 'beats', 'theme song', 'ambient', 'ost', 'jingle', 'melody'];
+KW.research = ['research', 'compare', 'comparison', 'sources', 'find out', 'analyze', 'analyse', 'market', 'competitors', 'statistics', 'study', 'review of', 'investigate', 'pros and cons'];
 KW.plan = ['plan', 'plans', 'roadmap', 'steps', 'how do i', 'how to', 'strategy', 'schedule', 'timeline', 'milestones'];
 KW.text = ['write', 'description', 'descriptions', 'copy', 'post', 'posts', 'email', 'story', 'blog', 'article', 'caption', 'captions', 'bio', 'tagline', 'slogan', 'newsletter', 'letter', 'summary', 'pitch', 'announcement', 'listing', 'dialogue', 'lyrics'];
 const has = (txt, w) => new RegExp('(^|[^a-z0-9])' + w.replace(/ /g, '\\s+') + '($|[^a-z0-9])', 'i').test(txt);
 const score = (txt, t) => KW[t].reduce((s, w) => s + (has(txt, w) ? 1 : 0), 0);
 // Child bubble (the deliverable) weighs most; the rest of the path breaks ties. Plan wins only when the child asks for one.
-export function guessType(path) {
+export function guessType(path, { research = false } = {}) {
   const child = path[path.length - 1] || '', all = path.join(' \n ');
   if (score(child, 'plan')) return 'plan';
-  const order = ['music', 'image', 'code', 'text'];
+  const order = research ? ['music', 'image', 'code', 'research', 'text'] : ['music', 'image', 'code', 'text'];
   const sc = t => score(child, t) * 10 + score(all, t);
   let best = 'text', bs = 0;
   for (const t of order) { const v = sc(t); if (v > bs) { bs = v; best = t; } }
@@ -254,6 +255,173 @@ export async function copy(txt, toast) {
   toast(ok ? 'Copied' : 'Copy blocked: long-press the text to copy'); return ok;
 }
 
+// ---------- v1.3.0: standalone builder engine (shared helpers above) ----------
+// Per-AI formatting follows each vendor's published prompting guidance (see PROMPT-SOURCES.md):
+//  Claude  - XML-tagged sections, clear role + explicit instructions: https://docs.claude.com/en/docs/build-with-claude/prompt-engineering/use-xml-tags
+//  Gemini  - persona / constraints / output format first, context before the task, task last ("Based on the information above"):
+//            https://ai.google.dev/gemini-api/docs/prompting-strategies
+//  Grok    - precise goal + requirements, only relevant context, Markdown/labelled sections, concise:
+//            https://docs.x.ai/docs/guides/grok-code-prompt-engineering , https://docs.x.ai/developers/model-capabilities/text/best-practices
+//  Muse    - Meta's assistant (meta.ai): plain conversational descriptions; images: subject, setting, mood, style, lighting and the
+//            aspect ratio stated in text; be specific about format: https://www.meta.com/help/superintelligence/2074655449783957/ ,
+//            https://dev.meta.ai/docs/api-reference/images/create-image
+export const AIS = { grok: 'Grok', muse: 'Meta Muse', gemini: 'Gemini', claude: 'Claude', other: 'Other' };
+export const SB_TYPES = { code: 'Code', image: 'Image', music: 'Music', research: 'Research', text: 'Text', plan: 'Plan' };
+export const LENGTHS = { short: 'Short', normal: 'Normal', detailed: 'Detailed' };
+export const TONES = { casual: 'Casual', professional: 'Professional', fun: 'Fun', neutral: 'Neutral' };
+// Plain web addresses only. No prefill parameter is officially documented for these web apps, so we copy first and open.
+export const AI_URLS = { grok: 'https://grok.com/', muse: 'https://www.meta.ai/', gemini: 'https://gemini.google.com/app', claude: 'https://claude.ai/new' };
+// Claude replies with text and code only (no image or audio output): https://docs.claude.com/en/docs/about-claude/models/overview
+export function aiHint(ai, type) {
+  if (ai === 'claude' && type === 'image') return 'Claude can’t make images itself: it will polish this into a final prompt. Paste that into an image AI.';
+  if (ai === 'claude' && type === 'music') return 'Claude can’t make audio itself: it will polish this into a final prompt. Paste that into a music AI.';
+  if (type === 'music') return 'Many chat AIs can’t make audio. If yours replies with text only, paste this prompt into a music AI.';
+  return '';
+}
+export const splitList = t => String(t || '').split(/[,;\n]+/).map(x => x.trim().replace(/\.$/, '')).filter(Boolean);
+const mergeAvoid = (base, extra) => { const out = [], seen = new Set(); for (const x of [...base, ...splitList(extra)]) { const k = x.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(x); } } return out; };
+const sentence = t => { t = String(t || '').trim().replace(/\s+/g, ' '); return t && !/[.!?]$/.test(t) ? t + '.' : t; };
+const firstLine = t => String(t || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '';
+
+// form: {ai, type, want, context, length, tone, avoid}. Returns a neutral spec the renderers format per AI.
+export function compose(form) {
+  const want = String(form.want || '').trim(), ctxt = String(form.context || '').trim();
+  const type = form.type || guessType([want], { research: true });
+  const len = form.length || 'normal', tone = form.tone || 'neutral';
+  const all = want + ' \n ' + ctxt, deliver = cap(clean(want).replace(VERB, '')) || 'Something useful';
+  const T = { casual: 'casual and friendly', professional: 'professional and polished', fun: 'fun, playful and upbeat', neutral: 'clear and neutral' }[tone];
+  const sp = { type, role: '', task: '', details: [], avoid: [], format: '', uncertain: 'If a detail is missing, make a sensible assumption, state it in one line, and continue.', context: ctxt, deliver };
+  if (type === 'image') {
+    const o = imageStyle(all);
+    if (tone === 'fun') o.style += ', playful and fun mood'; else if (tone === 'professional') o.style += ', clean, polished professional finish'; else if (tone === 'casual') o.style += ', relaxed, friendly feel';
+    if (len === 'short') o.detail = 'simple, low detail, bold readable shapes'; else if (len === 'detailed') o.detail = 'high detail with rich textures on the subject, background still secondary';
+    Object.assign(sp, { role: 'an expert digital artist and art director', task: `Create an image: ${deliver}.`,
+      details: [['Style & medium', o.style], ['Composition', o.comp], ['Lighting', o.light], ['Color palette', o.palette], ['Detail level', o.detail], ['Aspect ratio / size', o.ar], ['Background', o.bg], ['Consistency', o.cons]],
+      avoid: mergeAvoid(o.neg, form.avoid), format: 'Generate 4 variations that follow this description so I can pick the best.' });
+  } else if (type === 'music') {
+    const th = musicTheme(all), n = trackCount(all) || 1;
+    const L = { short: '30–60 seconds', normal: '60–120 seconds', detailed: '120–180 seconds' }[len];
+    const tracks = Array.from({ length: n }, (_, i) => { const m = MOODS[i % MOODS.length]; return `Track ${i + 1} “${m[0]}”: ${m[1]}; tempo at the ${m[2]} of the range`; });
+    Object.assign(sp, { role: 'an experienced game and media composer', task: `Compose ${n === 1 ? 'one original instrumental track' : `${n} original instrumental tracks`} for: ${deliver}.`,
+      details: [...(n > 1 ? [['Tracks', tracks.join('; ')]] : []), ['Theme', th.sure ? th.theme : `if the theme is a ${th.theme}, lean into it; otherwise keep it fitting for a casual game`], ['Genre & style', th.genre],
+        ['Mood', tone === 'neutral' ? 'inviting, never annoying on repeat' : `${T}, never annoying on repeat`], ['Tempo', `${th.bpm}, steady`], ['Key', th.key], ['Instruments', th.inst], ['Length', `${L} per track`],
+        ['Seamless loop', 'end flows straight back into the start with matching tempo, key and energy; no fade-in or fade-out; no reverb tail cut off; loop point on a bar boundary; instrumental, no vocals'],
+        ['Mixing', 'background level with room in the mids and highs for sound effects'], ['Export', 'WAV or high-quality OGG, 44.1 kHz, one file per track']],
+      avoid: mergeAvoid(['vocals or lyrics', 'abrupt endings', 'fades', 'clipping', 'overly busy melodies', 'copying existing songs'], form.avoid), format: n > 1 ? `${n} separate tracks, named by title.` : 'One track.' });
+  } else if (type === 'code') {
+    const lang = langOf(all);
+    Object.assign(sp, { role: 'a senior software engineer who writes clean, working, production-ready code', task: `Write the complete, working code for: ${deliver}.`,
+      details: [['Tech / language', lang || 'pick the simplest suitable stack and say why in one line'], ['Requirements', 'do exactly what is asked, keep scope tight, small readable functions, handle errors and invalid input, no secrets in code'],
+        ['Comments', { short: 'minimal, only where logic is not obvious', normal: 'short comments where logic is not obvious', detailed: 'clear comments plus a short README section' }[len]],
+        ['Tests', len === 'short' ? 'one quick test of the main path' : 'unit tests for the main path and edge cases (empty, large, bad or missing data, offline)'],
+        ...(tone !== 'neutral' ? [['User-facing text', `messages and labels in a ${T} tone`]] : [])],
+      avoid: mergeAvoid(['placeholders or "..." in code', 'unneeded dependencies', 'hard-coded secrets'], form.avoid),
+      format: 'Output the full code: every file complete in its own fenced code block with the file name above it, then the tests, then short run instructions.' });
+  } else if (type === 'research') {
+    const L = { short: 'a 5-bullet summary', normal: 'about 500 words', detailed: 'a detailed report of about 1,200 words' }[len];
+    Object.assign(sp, { role: 'a careful research analyst', task: `Research this and report back: ${deliver}.`,
+      details: [['Scope', 'the most relevant, current information (state dates); say what is unknown'], ['Sources', 'prefer primary and reputable sources; cite each key claim with a link'],
+        ['Method', 'compare options side by side where relevant and note trade-offs'], ['Tone', T], ['Length', L]],
+      avoid: mergeAvoid(['unsourced claims', 'outdated information presented as current', 'filler'], form.avoid),
+      format: 'A one-paragraph summary, key findings as bullets with sources, a comparison table if useful, then open questions and next steps.',
+      uncertain: 'If something cannot be verified, say so clearly instead of guessing.' });
+  } else if (type === 'plan') {
+    Object.assign(sp, { role: `an ${textRole(all)}`, task: `Make a practical step-by-step plan for: ${deliver}.`,
+      details: [['Steps', 'for each: the action, why it matters, tools or resources, expected output, and how I know it is done'], ['Tone', T],
+        ['Length', { short: '5–7 steps', normal: '7–12 steps', detailed: 'a detailed plan with phases and milestones' }[len]]],
+      avoid: mergeAvoid(['generic advice', 'expensive tools when free ones work'], form.avoid),
+      format: 'One-sentence summary, numbered steps, a quick first action I can do today in under 30 minutes, then risks and how to avoid them.' });
+  } else {
+    const L = { short: 'about 50–100 words', normal: 'about 150–250 words', detailed: 'about 400–600 words' }[len];
+    Object.assign(sp, { type: 'text', role: 'a skilled professional writer', task: `Write this for me now: ${deliver}.`,
+      details: [['Tone', T], ['Length', L], ['Audience', 'infer it from the request and context; write for them directly']],
+      avoid: mergeAvoid(['generic filler', 'clichés', 'making up facts (use [placeholders])'], form.avoid),
+      format: 'Only the finished text, ready to paste (not a plan or tips), then 2 alternative opening lines.' });
+  }
+  if (form.formatOverride) { if (/\b(words?|sentences?|paragraphs?|seconds|minutes)\b/i.test(form.formatOverride)) sp.details = sp.details.filter(d => d[0] !== 'Length'); sp.format = form.formatOverride; sp.details.push(['Your format notes', form.formatOverride.replace(/\.$/, '')]); }
+  return sp;
+}
+const ctxBlock = c => c ? `Here is background and/or an example of what I like (follow its style and facts):\n${c}` : '';
+export function render(sp, ai = 'other') {
+  const D = sp.details, ctx = ctxBlock(sp.context), polish = ai === 'claude' && (sp.type === 'image' || sp.type === 'music');
+  const task = polish ? `Turn this brief into one final, ready-to-paste prompt for an ${sp.type === 'image' ? 'image' : 'music'} generator. Brief: ${sp.task}` : sp.task;
+  if (ai === 'claude') return [
+    `You are ${sp.role}.`, ``,
+    ...(ctx ? [`<context>`, ctx, `</context>`, ``] : []),
+    `<task>`, task, `</task>`, ``,
+    `<requirements>`, ...D.map(([k, v]) => `- ${k}: ${v}`), `</requirements>`, ``,
+    `<constraints>`, `- Avoid: ${sp.avoid.join(', ')}.`, `- ${sp.uncertain}`, `</constraints>`, ``,
+    `<output_format>`, polish ? 'Return only the final prompt in one block, then one line listing the negative prompt / avoid terms.' : sp.format, `</output_format>`,
+  ].join('\n');
+  if (ai === 'gemini') return [
+    `# Role`, `You are ${sp.role}.`, ``,
+    ...(ctx ? [`# Context`, ctx, ``] : []),
+    `# Requirements`, ...D.map(([k, v]) => `- **${k}:** ${v}`), ``,
+    `# Constraints`, `- Avoid: ${sp.avoid.join(', ')}.`, `- ${sp.uncertain}`, ``,
+    `# Output format`, sp.format, ``,
+    `# Task`, `${ctx ? 'Based on the information above, ' : ''}${ctx ? task.charAt(0).toLowerCase() + task.slice(1) : task}`,
+  ].join('\n');
+  if (ai === 'grok') return [
+    `GOAL: ${task}`, ``,
+    `CONTEXT:`, `- You are ${sp.role}.`, ...(sp.context ? sp.context.split('\n').filter(Boolean).map(l => `- ${l.trim()}`) : []), ``,
+    `DETAILS:`, ...D.map(([k, v]) => `- ${k}: ${v}`), ``,
+    `OUTPUT FORMAT: ${sp.format}`, ``,
+    `QUALITY BAR:`, `- Avoid: ${sp.avoid.join(', ')}.`, `- If uncertain: ${sp.uncertain}`,
+  ].join('\n');
+  if (ai === 'muse') {
+    const g = k => (D.find(d => d[0] === k) || [])[1];
+    if (sp.type === 'image') return [
+      `${task.replace(/^Create an image: (.)/, (_, c) => 'Create an image of ' + c.toLowerCase())}`, `Style: ${g('Style & medium')}.`,
+      `${cap(g('Composition'))}. ${cap(g('Lighting'))}. Colors: ${g('Color palette')}. ${cap(g('Detail level'))}.`,
+      `Background: ${g('Background')}. ${cap(g('Consistency'))}.`,
+      `Aspect ratio: ${g('Aspect ratio / size')}.`,
+      ...(sp.context ? [``, `For reference: ${sp.context.replace(/\s+/g, ' ')}`] : []),
+      ``, `Avoid: ${sp.avoid.join(', ')}.`, sp.format,
+    ].join('\n');
+    return [
+      `${task} You are ${sp.role}.`,
+      ...(sp.context ? [``, `Some background: ${sp.context.replace(/\s+/g, ' ')}`] : []),
+      ``, `Please include:`, ...D.map(([k, v]) => `- ${k}: ${v}`), ``,
+      `Format: ${sp.format}`, `Avoid: ${sp.avoid.join(', ')}. ${sp.uncertain}`,
+    ].join('\n');
+  }
+  return [
+    `Role: You are ${sp.role}.`, ``, `Task: ${task}`,
+    ...(ctx ? [``, `Context: ${ctx}`] : []), ``,
+    ...D.map(([k, v]) => `${k}: ${sentence(v)}`), ``,
+    `Avoid: ${sp.avoid.join(', ')}.`, ``, `Output format: ${sp.format}`, ``, sp.uncertain,
+  ].join('\n');
+}
+export const buildPrompt = form => render(compose(form), form.ai);
+
+// Improve: restructure a hand-written prompt offline. Keeps the user's content, drops filler, sorts sentences into
+// task / context / format / avoid, then renders it with the same per-AI structure.
+const FILLER = [/\b(um+|uh+|erm|hey|hi|hello|thanks|thank you|thx|pls|please|kindly|basically|literally|actually|just|really|very|maybe|sort of|kind of|i guess|you know|like,)\b[,!]?\s*/gi,
+  /^\s*(can|could|would|will) you\s+(please\s+)?/i, /^\s*i (want|would like|need) you to\s+/i, /^\s*i('d| would) like\s+(you to\s+)?/i, /^\s*i want\s+/i, /^\s*i need\s+/i, /^\s*(help me|try to)\s+/i, /\b(me )?like (?=(a|an|some|the)\b)/gi];
+export function improve(raw, { ai = 'other', type = '' } = {}) {
+  const parts = String(raw || '').replace(/\r/g, '').split(/\n+|(?<=[.!?])\s+/).map(x => x.trim()).filter(Boolean);
+  const tidy = x => { let t = x; for (const r of FILLER) t = t.replace(r, ''); t = t.replace(/\s{2,}/g, ' ').replace(/\s+([,.!?])/g, '$1').replace(/^[,.\s]+/, '').trim(); return t.replace(/[?!]+$/, '.'); };
+  const avoid = [], fmt = [], ctx = []; let task = '';
+  for (const p of parts) {
+    const t = tidy(p); if (!t || t.length < 3) continue;
+    const m = t.match(/^(?:don'?t|do not|never|avoid|no|without)\s+(?:use\s+|include\s+|add\s+|make it\s+)?(.+)$/i);
+    if (m) { avoid.push(...splitList(m[1].replace(/^(any|the)\s+/i, ''))); continue; }
+    if (/\b(format|bullet|bullets|list|table|json|markdown|word|words|paragraph|paragraphs|sentences|characters|aspect ratio|in \d+)\b/i.test(t) && task) { fmt.push(sentence(t)); continue; }
+    if (!task) task = t; else ctx.push(sentence(t));
+  }
+  if (!task) return '';
+  const ty = type || guessType([task + ' ' + ctx.join(' ')], { research: true });
+  return render(compose({ ai, type: ty, want: task.replace(/\.$/, ''), context: ctx.join('\n'), avoid: avoid.join(', '), formatOverride: fmt.length ? fmt.join(' ') : '' }), ai);
+}
+
+export const STARTERS = [
+  { id: 'starter-sprites', name: 'Game sprite sheet', ai: 'gemini', type: 'image', want: 'Pixel art sprite sheet for my game hero: idle, walk and jump frames', context: '', length: 'normal', tone: 'fun', avoid: 'blurry edges', starter: true },
+  { id: 'starter-music', name: 'Looping game music', ai: 'other', type: 'music', want: '3 background music tracks that loop seamlessly for my casual puzzle game', context: '', length: 'normal', tone: 'fun', avoid: '', starter: true },
+  { id: 'starter-code', name: 'App feature code', ai: 'claude', type: 'code', want: 'Add an offline-first favorites list to my vanilla JavaScript PWA, saved in IndexedDB', context: '', length: 'normal', tone: 'neutral', avoid: 'frameworks', starter: true },
+  { id: 'starter-research', name: 'Research brief', ai: 'grok', type: 'research', want: 'Compare the best ways for a solo indie dev to market a mobile match-3 game in 2026', context: '', length: 'normal', tone: 'professional', avoid: '', starter: true },
+  { id: 'starter-listing', name: 'Store listing description', ai: 'muse', type: 'text', want: 'Write a store description for my game', context: '', length: 'normal', tone: 'fun', avoid: 'all caps, emojis', starter: true },
+];
+
 // ---------- result sheet ----------
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 function btn(label, id, cls = 'btn') { const b = el('button', cls, label); b.type = 'button'; if (id) b.id = id; return b; }
@@ -305,35 +473,48 @@ export async function openSheet(ctx, entry, { onSaveBubble, onHistory } = {}) {
 }
 
 // ---------- history ----------
+export const pending = { load: null };
 export async function openHistory(ctx, opts = {}) {
   const o = ctx.modal('', 'pb-overlay');
   const sh = el('div', 'sheet pb-sheet pb-histsheet'); sh.setAttribute('role', 'dialog'); sh.setAttribute('aria-modal', 'true'); sh.setAttribute('aria-labelledby', 'pbh-h');
   const head = el('header'); const h = el('h2', null, 'Prompt history'); h.id = 'pbh-h'; head.appendChild(h);
   const x = btn('✕', 'pbh-x', 'iconbtn pb-iconx'); x.setAttribute('aria-label', 'Close'); head.appendChild(x); sh.appendChild(head);
-  const body = el('div', 'body'); body.id = 'pbh-list'; sh.appendChild(body); o.appendChild(sh);
+  const filt = el('div', 'pb-types pbh-filter'); const fAll = btn('All', 'pbh-all', 'chip'), fFav = btn('★ Favorites', 'pbh-fav', 'chip');
+  filt.append(fAll, fFav);
+  const body = el('div', 'body'); body.id = 'pbh-list'; const wrap = el('div', 'body pbh-wrap'); wrap.append(filt); sh.append(wrap, body); o.appendChild(sh);
+  let favOnly = !!opts.favOnly;
   const close = () => { o.remove(); removeEventListener('keydown', onEsc, true); };
   const onEsc = ev => { if (ev.key === 'Escape' && o.isConnected) { ev.stopPropagation(); close(); } };
   addEventListener('keydown', onEsc, true);
   x.onclick = close; o.addEventListener('click', ev => { if (ev.target === o) close(); });
   const draw = async () => {
-    const list = await store.listPrompts(); body.textContent = '';
-    if (!list.length) { const em = el('div', 'empty'); em.appendChild(el('span', 'big', '🪄')); em.appendChild(el('b', null, 'No prompts yet.')); em.appendChild(el('div', null, 'In a mind map, tap Prompt, then pick a parent and a child bubble.')); body.appendChild(em); return; }
+    fAll.classList.toggle('on', !favOnly); fFav.classList.toggle('on', favOnly); fAll.setAttribute('aria-pressed', String(!favOnly)); fFav.setAttribute('aria-pressed', String(favOnly));
+    const list = (await store.listPrompts()).filter(it => !favOnly || it.fav); body.textContent = '';
+    if (!list.length) { const em = el('div', 'empty'); em.appendChild(el('span', 'big', favOnly ? '★' : '🪄')); em.appendChild(el('b', null, favOnly ? 'No favorites yet.' : 'No prompts yet.')); em.appendChild(el('div', null, favOnly ? 'Tap ☆ on a prompt to star it.' : 'Use the Prompts tab, or in a mind map tap Prompt, then pick a parent and a child bubble.')); body.appendChild(em); return; }
     for (const it of list) {
-      const c = el('div', 'card pbh-item'); c.dataset.pid = it.id;
-      const top = el('div', 'pbh-top'); top.appendChild(el('span', 'pbh-type t-' + it.type, TYPES[it.type] || it.type));
-      top.appendChild(el('span', 'pbh-date', new Date(it.date).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + (it.mapTitle ? ' · ' + it.mapTitle : '')));
+      const c = el('div', 'card pbh-item' + (it.fav ? ' fav' : '')); c.dataset.pid = it.id;
+      const top = el('div', 'pbh-top'); top.appendChild(el('span', 'pbh-type t-' + it.type, SB_TYPES[it.type] || it.type));
+      const where = it.source === 'builder' ? ' · ' + (it.ai === 'other' ? (it.aiOther || 'Other') : AIS[it.ai] || 'Builder') : it.mapTitle ? ' · ' + it.mapTitle : '';
+      top.appendChild(el('span', 'pbh-date', new Date(it.date).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + where));
+      const st = btn(it.fav ? '★' : '☆', null, 'iconbtn pbh-star'); st.dataset.h = 'star'; st.setAttribute('aria-label', it.fav ? 'Remove from favorites' : 'Add to favorites'); st.setAttribute('aria-pressed', String(!!it.fav)); top.appendChild(st);
       c.appendChild(top);
-      c.appendChild(el('div', 'pbh-chain', chainText(it.path && it.path.length ? it.path : [it.parentText, it.childText])));
+      c.appendChild(el('div', 'pbh-chain', it.source === 'builder' ? (it.form && it.form.want || '').slice(0, 140) : chainText(it.path && it.path.length ? it.path : [it.parentText, it.childText])));
       c.appendChild(el('div', 'pbh-prev', it.prompt.slice(0, 160) + (it.prompt.length > 160 ? '…' : '')));
       const acts = el('div', 'acts'); const bc = btn('Copy'), bo = btn('Reopen'), bd = btn('Delete', null, 'btn danger');
       bc.dataset.h = 'copy'; bo.dataset.h = 'open'; bd.dataset.h = 'del'; acts.append(bc, bo, bd); c.appendChild(acts); body.appendChild(c);
     }
   };
+  fAll.onclick = () => { favOnly = false; draw(); }; fFav.onclick = () => { favOnly = true; draw(); };
   body.onclick = async ev => {
     const b = ev.target.closest('[data-h]'); if (!b) return; const id = b.closest('[data-pid]').dataset.pid;
     const it = (await store.listPrompts()).find(z => z.id === id); if (!it) return;
+    if (b.dataset.h === 'star') { await store.savePrompt({ ...it, fav: !it.fav }); ctx.toast(it.fav ? 'Removed from favorites' : 'Added to favorites ★'); draw(); }
     if (b.dataset.h === 'copy') await copy(it.prompt, ctx.toast);
-    if (b.dataset.h === 'open') { close(); openSheet(ctx, it, { onSaveBubble: opts.mapId === it.mapId ? opts.onSaveBubble : null }); }
+    if (b.dataset.h === 'open') {
+      close();
+      if (it.source === 'builder') { if (opts.onReopen) opts.onReopen(it); else { pending.load = it; location.hash = '#/prompts'; } }
+      else openSheet(ctx, it, { onSaveBubble: opts.mapId === it.mapId ? opts.onSaveBubble : null });
+    }
     if (b.dataset.h === 'del' && await ctx.confirmDialog('Delete this prompt?', 'It will be removed from your prompt history.', 'Delete', true)) { await store.deletePrompt(id); ctx.toast('Prompt deleted'); draw(); }
   };
   await draw();

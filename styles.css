@@ -368,3 +368,34 @@ body.mm-open { overflow: hidden; overscroll-behavior: none; }
 /* v1.2.1 */
 .pb-types .chip { flex: 1 1 auto; padding: 0 12px; min-width: 64px; }
 .pbh-type.t-music { background: #c77dff; } .pbh-type.t-plan { background: #ffd166; color: #1e293b; }
+
+/* v1.3.0 Prompt builder (blueprint look) */
+.bottomnav a { font-size: 12px; min-width: 0; }
+.bottomnav a svg { padding: 2px 10px; }
+body[data-route="prompts"] #fab { display: none; }
+.pbx-card, .pbx-prev { background: linear-gradient(160deg, #0b3d91, #123f8c 60%, #0d2f6b); color: #fff; border-radius: 18px; padding: 14px; border: 1.5px solid rgba(255,255,255,.3);
+  background-image: linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px), linear-gradient(160deg, #0b3d91, #0d2f6b);
+  background-size: 22px 22px, 22px 22px, auto; }
+.pbx-prev { margin-top: 12px; } .pbx-prev h2 { color: #cfe0ff; margin: 0 0 8px; }
+.pbx-field { display: block; margin-bottom: 12px; }
+.pbx-label { display: block; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: #ffd166; margin: 0 2px 6px; }
+.pbx .chip { min-height: 44px; }
+.pbx .pb-types .chip { background: rgba(255,255,255,.1); color: #fff; border-color: rgba(255,255,255,.4); }
+.pbx .pb-types .chip.on { background: #fff; color: #0b3d91; border-color: #fff; }
+.pbx-in, .pbx-ta { width: 100%; min-height: 44px; background: rgba(3,15,40,.55); color: #fff; border: 1.5px solid rgba(255,255,255,.5); border-radius: 12px; box-sizing: border-box; }
+.pbx-ta { resize: vertical; padding: 10px 12px; font: inherit; }
+.pbx-in[hidden] { display: none; }
+#pbx-other { margin: -4px 0 12px; }
+.pbx-auto { font-size: 13px; color: #cfe0ff; margin: -6px 2px 10px; min-height: 1em; }
+.pbx-hint { background: #fff3cd; color: #5c4400; border-radius: 12px; padding: 10px 12px; margin: 12px 0 0; font-size: 14px; }
+.pbx-hint[hidden] { display: none; }
+.pbx-out { min-height: 34vh; }
+.pbx-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.pbx-acts .btn { flex: 1 1 45%; min-height: 48px; }
+.pbx-acts .btn[hidden] { display: none; }
+.pbh-wrap { flex: 0 0 auto !important; padding-bottom: 0 !important; }
+.pbh-filter .chip { min-height: 44px; }
+.pbh-star { margin-left: auto; min-width: 44px; min-height: 44px; border: 0; background: transparent; color: #ffd166; font-size: 22px; cursor: pointer; }
+.pbh-item.fav { border-color: #ffd166 !important; }
+.pbh-type.t-research { background: #ff9f1c; color: #1e293b; }
+.pbt-item .pbh-chain { font-size: 16px; }

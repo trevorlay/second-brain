@@ -161,9 +161,21 @@ function normPrompt(p) {
   const s = (v, n) => String(v ?? '').slice(0, n);
   return { id: s(p.id || uid(), 64), mapId: p.mapId ? s(p.mapId, 64) : null, mapTitle: s(p.mapTitle, 120), parentId: p.parentId ? s(p.parentId, 64) : null, childId: p.childId ? s(p.childId, 64) : null,
     parentText: s(p.parentText, 500), childText: s(p.childText, 500), path: (Array.isArray(p.path) ? p.path : []).slice(0, 60).map(x => s(x, 500)),
-    related: (Array.isArray(p.related) ? p.related : []).slice(0, 40).map(x => s(x, 600)), type: ['image', 'code', 'text'].includes(p.type) ? p.type : 'text',
-    prompt: s(p.prompt, 20000), date: p.date || now(), updatedAt: p.updatedAt || p.date || now() };
+    related: (Array.isArray(p.related) ? p.related : []).slice(0, 40).map(x => s(x, 600)), type: ['image', 'code', 'text', 'music', 'plan', 'research'].includes(p.type) ? p.type : 'text',
+    prompt: s(p.prompt, 20000), ...(p.fav ? { fav: true } : {}), ...(p.source === 'builder' ? { source: 'builder', ai: s(p.ai, 20), aiOther: s(p.aiOther, 60), form: normForm(p.form || {}) } : {}), date: p.date || now(), updatedAt: p.updatedAt || p.date || now() };
 }
+// v1.3.0 builder form + templates (settings record 'pbTemplates').
+export function normForm(f) {
+  const s = (v, n) => String(v ?? '').slice(0, n);
+  return { ai: s(f.ai, 20), aiOther: s(f.aiOther, 60), type: s(f.type, 20), want: s(f.want, 4000), context: s(f.context, 8000), length: s(f.length, 20), tone: s(f.tone, 20), avoid: s(f.avoid, 2000) };
+}
+export async function listTemplates() { const r = await get('settings', 'pbTemplates'); return r && Array.isArray(r.value) ? r.value : []; }
+async function putTemplates(list) { await put('settings', { key: 'pbTemplates', value: list.slice(0, 200) }); }
+export async function saveTemplate(t) {
+  const rec = { ...normForm(t), id: String(t.id || uid()).slice(0, 64), name: String(t.name || 'Template').slice(0, 80), updatedAt: now() };
+  await putTemplates([rec, ...(await listTemplates()).filter(x => x.id !== rec.id)]); return rec;
+}
+export async function deleteTemplate(id) { await putTemplates((await listTemplates()).filter(x => x.id !== id)); }
 export async function listPrompts() {
   const rec = await get('settings', 'prompts'); const v = rec && Array.isArray(rec.value) ? rec.value : [];
   return v.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
@@ -180,9 +192,9 @@ export async function dbInfo() {
 }
 
 export async function exportAll() {
-  const [entries, projects, settings, maps, prompts] = await Promise.all([listEntries(), listProjects(), getSettings(), listMaps(), listPrompts()]);
+  const [entries, projects, settings, maps, prompts, promptTemplates] = await Promise.all([listEntries(), listProjects(), getSettings(), listMaps(), listPrompts(), listTemplates()]);
   const { lastProjectId, lastApp, lastBotName, seeded, mmHintSeen, ...portable } = settings;
-  return { app: 'second-brain', schema: SCHEMA, exportedAt: now(), entries, projects, maps, prompts, settings: portable };
+  return { app: 'second-brain', schema: SCHEMA, exportedAt: now(), entries, projects, maps, prompts, promptTemplates, settings: portable };
 }
 
 // mode: 'merge' (keep the newer copy of each item by updatedAt) or 'replace' (wipe, then load).
@@ -228,5 +240,11 @@ export async function importAll(data, mode = 'merge') {
     for (const x of prompts) if (newerOf(x, cur.get(x.id))) cur.set(x.id, normPrompt(x));
     await putPrompts([...cur.values()].sort((a, b) => (b.date || '').localeCompare(a.date || '')));
   }
-  return { added, updated, total: data.entries.length, maps: maps.length, prompts: prompts ? prompts.length : 0 };
+  const tpls = Array.isArray(data.promptTemplates) ? data.promptTemplates.filter(x => x && x.id) : null;
+  if (tpls) {
+    const cur = mode === 'replace' ? new Map() : new Map((await listTemplates()).map(x => [x.id, x]));
+    for (const x of tpls) if (newerOf(x, cur.get(x.id))) cur.set(x.id, { ...normForm(x), id: String(x.id).slice(0, 64), name: String(x.name || 'Template').slice(0, 80), updatedAt: x.updatedAt || now() });
+    await putTemplates([...cur.values()]);
+  }
+  return { added, updated, total: data.entries.length, maps: maps.length, prompts: prompts ? prompts.length : 0, templates: tpls ? tpls.length : 0 };
 }

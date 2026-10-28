@@ -1,8 +1,9 @@
 import * as store from './store.js';
 import { STATUSES, FILE_TYPES } from './store.js';
 import * as mm from './mindmap.js';
+import { renderBuilder } from './builder.js';
 
-const VERSION = '1.2.1';
+const VERSION = '1.3.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const view = $('#view');
@@ -451,6 +452,7 @@ function render() {
   else if (route === 'project') renderProject(decodeURIComponent(arg));
   else if (route === 'settings') renderSettings();
   else if (route === 'maps') mm.renderMaps(mmCtx);
+  else if (route === 'prompts') renderBuilder(mmCtx);
   else if (route === 'map') { const id = decodeURIComponent(arg); mm.openEditor(id, mmCtx).then(f => { if (location.hash === h) leaveEditor = f; else f(); }); }
   else renderSearch();
 }
